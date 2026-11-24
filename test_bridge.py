@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
+import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 from app import Bridge, BridgeHandler
 from config import Config
@@ -245,7 +249,8 @@ class FreeModeTests(unittest.TestCase):
             default_model="big-pickle",
             upstream_api_key="public",
             upstream_user_agent="opencode/latest/2.3.0/cli",
-            bun_path="/nonexistent/bun",  # keep unit tests on the fake urllib upstream
+            go_path="",  # keep unit tests hermetic (no real Go/Bun helper)
+            bun_path="/nonexistent/bun",
         )
         cls.server, cls.url = _serve(BridgeHandler, config)
 
@@ -297,6 +302,44 @@ class FreeModeTests(unittest.TestCase):
         self.assertIn("Hello ", raw)
         self.assertIn("from free tier", raw)
         self.assertTrue(raw.endswith("data: [DONE]\n\n"))
+
+
+class TransportTests(unittest.TestCase):
+    """Verify free_request prefers the configured Go helper without needing a network."""
+
+    def test_go_helper_is_used(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "used"
+            helper = Path(tmp) / "fake-o2a-tls"
+            helper.write_text(
+                "#!/bin/sh\n"
+                f"echo used > \"$O2A_TEST_MARKER\"\n"
+                "echo '__O2A_STATUS__ 200 OK'\n"
+                "echo '__O2A_HEADERS__ {\"content-type\":\"text/event-stream\"}'\n"
+                "echo 'data: {\"choices\":[{\"delta\":{\"content\":\"from go\"}}]}'\n"
+                "echo\n"
+                "echo 'data: [DONE]'\n"
+                "echo\n",
+                encoding="utf-8",
+            )
+            helper.chmod(helper.stat().st_mode | stat.S_IEXEC)
+            os.environ["O2A_TEST_MARKER"] = str(marker)
+            try:
+                config = Config(
+                    upstream_mode="opencode_free",
+                    opencode_free_base_url="http://127.0.0.1:1",
+                    upstream_api_key="public",
+                    go_path=str(helper),
+                    bun_path="/nonexistent/bun",
+                )
+                stream = Bridge(config).free_request(
+                    "/openai/v1/chat/completions", b"{}", {"Content-Type": "application/json"}
+                )
+                self.assertEqual(stream.status, 200)
+                self.assertIn(b"from go", stream.read())
+                self.assertTrue(marker.is_file(), "the Go helper should have been executed")
+            finally:
+                os.environ.pop("O2A_TEST_MARKER", None)
 
 
 if __name__ == "__main__":

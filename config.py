@@ -46,6 +46,22 @@ def resolve_bun(value: str | None = None) -> str:
     return candidate
 
 
+def resolve_go(value: str | None = None) -> str:
+    """Resolve the Go TLS-transport binary (preferred over Bun in free mode).
+
+    Looks at O2A_GO, a binary bundled in assets/tls_http, then PATH. An empty
+    string means "not installed" and lets the bridge fall back to Bun/urllib.
+    """
+    candidate = value if value is not None else _env("O2A_GO", "")
+    if candidate:
+        return candidate  # explicit path stays explicit (including deliberately missing paths)
+    bundled = Path(__file__).parent / "assets" / "tls_http" / "o2a-tls"
+    if bundled.is_file() and os.access(bundled, os.X_OK):
+        return str(bundled)
+    found = shutil.which("o2a-tls")
+    return found or ""
+
+
 def _env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -84,7 +100,9 @@ class Config:
     append_assistant_cue: bool = True
     stream_chunk_chars: int = 12
     timeout: int = 180
-    # Bun is used only as the TLS transport for opencode_free mode; Python code stays stdlib-only.
+    # Go (utls custom ClientHello) is the preferred TLS transport for opencode_free;
+    # Bun and urllib are fallbacks. Python code itself stays stdlib-only.
+    go_path: str = ""
     bun_path: str = "bun"
 
     @classmethod
@@ -106,6 +124,7 @@ class Config:
             append_assistant_cue=_env_bool("APPEND_ASSISTANT_CUE", True),
             stream_chunk_chars=_env_int("STREAM_CHUNK_CHARS", 12),
             timeout=_env_int("REQUEST_TIMEOUT", 180),
+            go_path=resolve_go(_env("O2A_GO", "")),
             bun_path=resolve_bun(_env("O2A_BUN", "bun")),
         )
 

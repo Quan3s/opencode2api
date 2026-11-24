@@ -22,7 +22,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from config import resolve_bun
+from config import resolve_bun, resolve_go
 
 ROOT = Path(__file__).parent
 ENV_FILE = ROOT / ".env"
@@ -104,6 +104,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
         os.environ.setdefault("CLIENT_API_KEY", env["CLIENT_API_KEY"])
     if env.get("O2A_BUN"):
         os.environ.setdefault("O2A_BUN", env["O2A_BUN"])
+    if env.get("O2A_GO"):
+        os.environ.setdefault("O2A_GO", env["O2A_GO"])
     os.environ["O2A_BUN"] = resolve_bun(os.environ.get("O2A_BUN"))
     os.execv(sys.executable, [sys.executable, str(ROOT / "app.py"), "--port", str(args.port)])
 
@@ -219,9 +221,13 @@ def cmd_config(args: argparse.Namespace) -> None:
 
 
 def cmd_doctor(args: argparse.Namespace) -> None:
-    bun = resolve_bun(os.environ.get("O2A_BUN") or load_env().get("O2A_BUN"))
-    found = shutil.which(bun) or (bun if Path(bun).is_file() else None)
-    print(f"bun: {found or 'MISSING (free mode may return 429)'}")
+    env = load_env()
+    go = resolve_go(os.environ.get("O2A_GO") or env.get("O2A_GO"))
+    bun = resolve_bun(os.environ.get("O2A_BUN") or env.get("O2A_BUN"))
+    found_go = go and Path(go).is_file()
+    found_bun = shutil.which(bun) or (bun if Path(bun).is_file() else None)
+    print(f"go tls: {found_go or 'MISSING (trying Bun next)'}")
+    print(f"bun:    {found_bun or 'MISSING (free mode may return 429)'}")
     with request(args, "/health") as response:
         print(f"health: HTTP {response.status} {response.read().decode('utf-8', 'replace')}")
 
@@ -255,7 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
     config.add_argument("value", nargs="?")
     config.set_defaults(func=cmd_config)
 
-    doctor = sub.add_parser("doctor", help="check bun and bridge health")
+    doctor = sub.add_parser("doctor", help="check TLS transports and bridge health")
     doctor.set_defaults(func=cmd_doctor)
 
     for command in (models, chat, doctor):

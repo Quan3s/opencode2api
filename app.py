@@ -5,8 +5,9 @@ Exposes OpenAI-shaped endpoints (/v1/chat/completions, /v1/responses, /v1/models
 and translates them to OpenCode's HTTP API, to a reconstructed official free-tier
 OpenCode inference request, or to an existing OpenAI-compatible gateway.
 
-Standard library only: python3 app.py. In opencode_free mode a small Bun helper is
-used as the TLS transport because the free tier fingerprints the HTTP client.
+Standard library only: python3 app.py. In opencode_free mode a small helper (Go
+utls by default, Bun as fallback) supplies the TLS ClientHello the free tier
+fingerprints; Python code itself remains stdlib-only.
 """
 
 from __future__ import annotations
@@ -48,8 +49,8 @@ class UpstreamError(Exception):
         self.payload = payload
 
 
-class BunStream:
-    """Minimal HTTPResponse-compatible stream backed by the Bun transport helper."""
+class HelperStream:
+    """Minimal HTTPResponse-compatible stream backed by an external TLS helper."""
 
     def __init__(self, process: subprocess.Popen[bytes], status: int, headers: dict[str, Any]):
         self.process = process
@@ -70,12 +71,20 @@ class BunStream:
             except Exception:
                 pass
         stderr = self.process.stderr.read() if self.process.stderr else b""  # type: ignore[union-attr]
+        try:
+            self.process.stderr.close()  # type: ignore[union-attr]
+        except Exception:
+            pass
         self.process.wait(timeout=10)
         if self.process.returncode and stderr:
             raise UpstreamError(502, stderr.decode("utf-8", "replace").strip()[:2000])
 
     def read(self) -> bytes:
         return b"".join(self.__iter__())
+
+
+# Backwards-compatible name for code importing the old Bun-only stream class.
+BunStream = HelperStream
 
 
 class Bridge:
@@ -159,47 +168,69 @@ class Bridge:
         return UpstreamError(status, message[:2000], raw)
 
     def free_request(self, path: str, raw_data: bytes, headers: dict[str, str]) -> Any:
-        """POST through Bun so the free tier sees the official CLI TLS fingerprint."""
-        helper = Path(__file__).parent / "assets" / "bun_http.js"
+        """POST through a TLS helper so the free tier sees the official CLI ClientHello.
+
+        Preference order: the Go `utls` helper (cross-compiles to Android arm32),
+        then Bun, then stdlib urllib. Only a missing helper falls through; a real
+        upstream error response is surfaced to the caller.
+        """
+        url = self.base_url() + path
         env = os.environ.copy()
         env["O2A_HEADERS_JSON"] = json.dumps(headers)
-        try:
-            process = subprocess.Popen(
-                [self.config.bun_path, str(helper), self.base_url() + path],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=env,
-            )
-        except FileNotFoundError:
-            # Deployment without Bun: still correct request shape, but the upstream
-            # may answer 429 because urllib's TLS fingerprint differs from the CLI.
-            return self.request("POST", path, raw_data=raw_data, headers=headers)
+        bun_helper = Path(__file__).parent / "assets" / "bun_http.js"
 
-        try:
-            process.stdin.write(raw_data)  # type: ignore[union-attr]
-            process.stdin.close()  # type: ignore[union-attr]
-            status_line = process.stdout.readline().decode("utf-8", "replace").strip()  # type: ignore[union-attr]
-            header_line = process.stdout.readline().decode("utf-8", "replace").strip()  # type: ignore[union-attr]
-            if not status_line.startswith("__O2A_STATUS__ "):
-                stderr = process.stderr.read().decode("utf-8", "replace").strip()  # type: ignore[union-attr]
-                process.wait(timeout=10)
-                raise UpstreamError(502, stderr[:2000] or "Bun transport failed")
-            status = int(status_line.split(" ", 1)[1])
+        transports: list[list[str]] = []
+        if self.config.go_path:
+            transports.append([self.config.go_path, url])
+        if self.config.bun_path:
+            transports.append([self.config.bun_path, str(bun_helper), url])
+
+        transport_error = ""
+        for command in transports:
             try:
-                response_headers = json.loads(header_line.split(" ", 1)[1]) if header_line.startswith("__O2A_HEADERS__ ") else {}
-            except ValueError:
-                response_headers = {}
-            if status >= 400:
-                raw = process.stdout.read().decode("utf-8", "replace")  # type: ignore[union-attr]
-                process.stderr.close()  # type: ignore[union-attr]
-                process.wait(timeout=10)
-                raise self._error_from_body(status, raw)
-            return BunStream(process, status, response_headers)
-        except Exception:
-            if process.poll() is None:
-                process.kill()
-            raise
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                )
+            except FileNotFoundError:
+                continue
+            try:
+                process.stdin.write(raw_data)  # type: ignore[union-attr]
+                process.stdin.close()  # type: ignore[union-attr]
+                status_line = process.stdout.readline().decode("utf-8", "replace").strip()  # type: ignore[union-attr]
+                header_line = process.stdout.readline().decode("utf-8", "replace").strip()  # type: ignore[union-attr]
+                if not status_line.startswith("__O2A_STATUS__ "):
+                    stderr = process.stderr.read().decode("utf-8", "replace").strip()  # type: ignore[union-attr]
+                    transport_error = stderr[:2000] or f"{Path(command[0]).name} transport failed"
+                    process.wait(timeout=10)
+                    continue
+                # Helpers may emit `__O2A_STATUS__ 200` or `200 OK`.
+                status = int(status_line.split(" ", 1)[1].split()[0])
+                try:
+                    response_headers = json.loads(header_line.split(" ", 1)[1]) if header_line.startswith("__O2A_HEADERS__ ") else {}
+                except ValueError:
+                    response_headers = {}
+                if status >= 400:
+                    raw = process.stdout.read().decode("utf-8", "replace")  # type: ignore[union-attr]
+                    process.stderr.close()  # type: ignore[union-attr]
+                    process.wait(timeout=10)
+                    raise self._error_from_body(status, raw)
+                return HelperStream(process, status, response_headers)
+            except UpstreamError:
+                raise
+            except Exception:
+                if process.poll() is None:
+                    process.kill()
+                raise
+
+        if transport_error:
+            raise UpstreamError(502, transport_error)
+        # No helper installed: still correct request shape, but the upstream may
+        # answer 429 because urllib's TLS fingerprint differs from the CLI.
+        return self.request("POST", path, raw_data=raw_data, headers=headers)
 
     def upstream_model(self, requested: Any) -> str:
         name = str(requested or self.config.default_model)

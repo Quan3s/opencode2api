@@ -19,8 +19,9 @@ OpenAI SDK / Cursor / Cline / LibreChat
 ```
 
 **Có sẵn 3 lớp dùng:** bridge HTTP (OpenAI-compatible), CLI `o2a`, và web dashboard React.
-Bridge core và CLI chỉ dùng stdlib; Bun chỉ là transport TLS cho chế độ `opencode_free`;
-dashboard là React/Vite (chỉ cần build lúc đóng gói, runtime không cần Node).
+Bridge core và CLI chỉ dùng stdlib; một binary Go nhỏ (hoặc Bun làm fallback) chỉ đóng vai
+transport TLS cho chế độ `opencode_free`; dashboard là React/Vite (chỉ cần build lúc đóng gói,
+runtime không cần Node).
 
 ## Chạy nhanh
 
@@ -52,7 +53,7 @@ Wrapper nhỏ bằng stdlib, dùng trực tiếp không cần cài dependency:
 ./bin/o2a chat "chào bạn" --responses       # gọi /v1/responses
 ./bin/o2a config set CLIENT_API_KEY my-key  # ghi vào .env
 ./bin/o2a config list                       # liệt kê (key/token bị che)
-./bin/o2a doctor                            # kiểm tra Bun + /health
+./bin/o2a doctor                            # kiểm tra transport TLS (Go/Bun) + /health
 ```
 
 Mặc định CLI gọi `http://127.0.0.1:8080` với key `demo-local-key`; đổi bằng
@@ -140,20 +141,41 @@ Những phần được tái tạo:
 - `stream: true`, `stream_options.include_usage`, `max_completion_tokens: 32000`.
 
 **Transport:** mã Python vẫn dùng toàn bộ thư viện chuẩn, nhưng request free được gửi qua
-một helper Bun nhỏ (`assets/bun_http.js`). Lý do: upstream chặn theo TLS fingerprint —
-cùng một body/header, `curl` và Python `urllib` nhận `429`, còn Bun (cùng runtime với CLI
-chính thức) nhận `200`. Đặt `O2A_BUN=/đường/dẫn/tới/bun` nếu bun không có trong `PATH`;
-nếu không có bun, bridge fallback sang `urllib` và có thể lại gặp `429`.
+một helper ngoài để tái tạo đúng **TLS ClientHello** của CLI chính thức (chạy trên Bun/BoringSSL).
+Cùng một body/header, `curl` và Python `urllib` nhận `429`, còn Bun nhận `200` — dù đã bắt chước
+cả tên/thứ tự header, `Accept-Encoding` và `Connection`. Cloudflare ở `opencode.ai` phân biệt
+theo JA3/JA4, nên không thể sửa ở tầng HTTP.
+
+Thứ tự ưu tiên: **Go → Bun → `urllib`**.
+
+- **Go (mặc định):** `assets/tls_http/main.go` dùng `utls` để dựng lại ClientHello BoringSSL của Bun
+  (17 cipher, extensions `23,65281,10,11,35,16,5,13,18,51,45,43`, ALPN `http/1.1`, groups
+  `4588,29,23,24`). Helper chỉ đọc body từ stdin, in `__O2A_STATUS__` / `__O2A_HEADERS__` rồi SSE;
+  Python vẫn lo toàn bộ dịch request/response. Build sẵn tại `assets/tls_http/o2a-tls` hoặc đặt
+  `O2A_GO=/đường/dẫn/tới/o2a-tls`. Đây là lựa chọn duy nhất chạy được trên **Android arm32**
+  (Bun không có bản armv7).
+- **Bun (fallback):** `assets/bun_http.js`, tự tìm ở `PATH`, `~/.bun/bin/bun`, `/usr/local/bin/bun`
+  hoặc `O2A_BUN=...`.
+- **`urllib`:** chỉ khi không có helper nào; gần như chắc chắn bị `429`.
+
+```bash
+cd assets/tls_http && ./build.sh                       # ra ./o2a-tls cho host hiện tại
+GOOS=linux GOARCH=arm GOARM=7 ./build.sh /data/o2a-tls  # Android arm32 / Termux armv7
+GOOS=linux GOARCH=arm64 ./build.sh /data/o2a-tls        # Android arm64
+O2A_GO=/data/o2a-tls ./bin/o2a serve --port 8080
+```
+
+`build.sh` dùng `CGO_ENABLED=0` nên binary tĩnh, không cần libc hay toolchain trên thiết bị.
 
 Bridge có thể gom SSE thành JSON hoặc passthrough SSE theo thời gian thực, kèm `usage`
 và `tool_calls` thật từ upstream.
 
 > `429 FreeUsageLimitError` là thông báo chung của upstream free lane, **không phải hết quota của
 > `big-pickle`** (model này không có giới hạn dạng vài tỷ token). Nguyên nhân đã xác nhận là TLS
-> fingerprint: cùng body/header, `urllib`/`curl` nhận `429`, Bun nhận `200`. `o2a serve` tự tìm
-> Bun ở `PATH`, `~/.bun/bin/bun` và `/usr/local/bin/bun`; kiểm tra bằng `./bin/o2a doctor`.
-> Nếu vẫn `429` dù đã dùng Bun, đó là giới hạn IP/phiên free của upstream — thử IP khác hoặc dùng
-> lane Go/Zen có key (`/zen/go` yêu cầu API key, không phải chế độ free).
+> fingerprint: cùng body/header, `urllib`/`curl` nhận `429`, trong khi Bun và helper Go tái tạo
+> ClientHello đó nhận `200`. Kiểm tra bằng `./bin/o2a doctor`. Nếu vẫn `429` dù transport đúng,
+> đó là giới hạn IP/phiên free của upstream — thử IP khác hoặc dùng lane Go/Zen có key
+> (`/zen/go` yêu cầu API key, không phải chế độ free).
 
 ### 3. `UPSTREAM_MODE=openai` — nói chuyện với gateway opencode2api
 
@@ -241,7 +263,8 @@ hoặc `x-api-key: <key>`. Để trống để tắt auth (chỉ nên dùng loca
 | `APPEND_ASSISTANT_CUE` | `true` | Thêm `Assistant:` cuối prompt ở chế độ `opencode` |
 | `STREAM_CHUNK_CHARS` | `12` | Kích thước chunk giả lập streaming |
 | `REQUEST_TIMEOUT` | `180` | Timeout upstream (giây) |
-| `O2A_BUN` | `bun` | Đường dẫn Bun dùng làm transport cho chế độ `opencode_free` |
+| `O2A_GO` | `""` | Binary Go TLS transport (ưu tiên); tự tìm `assets/tls_http/o2a-tls` nếu trống |
+| `O2A_BUN` | `bun` | Đường dẫn Bun làm transport fallback cho chế độ `opencode_free` |
 
 ## Giới hạn
 
@@ -250,9 +273,12 @@ hoặc `x-api-key: <key>`. Để trống để tắt auth (chỉ nên dùng loca
 - Không có token usage thật từ OpenCode generate API → `usage` là ước lượng theo độ dài text.
 - Streaming ở chế độ `opencode` là chia nhỏ text đã generate xong (SSE chunk chuẩn OpenAI),
   không phải token streaming thật; các chế độ `openai` và `opencode_free` stream passthrough theo thời gian thực.
-- Chế độ `opencode_free` cần Bun làm transport để khớp TLS fingerprint của CLI. `o2a serve` tự
-  tìm Bun ở `PATH`, `~/.bun/bin/bun`, `/usr/local/bin/bun`; thiếu Bun thì bridge fallback sang
-  `urllib` và upstream gần như chắc chắn trả `429 FreeUsageLimitError`.
+- Chế độ `opencode_free` cần helper TLS để khớp TLS fingerprint của CLI. `o2a serve` tự tìm binary
+  Go ở `assets/tls_http/o2a-tls` hoặc `PATH`, rồi tới Bun ở `PATH`, `~/.bun/bin/bun`,
+  `/usr/local/bin/bun`; thiếu cả hai thì fallback sang `urllib` và upstream gần như chắc chắn
+  trả `429 FreeUsageLimitError`.
+- Bun không có build Android arm32 (ARMv7) — chỉ có aarch64/x64. Trên arm32 dùng binary Go
+  cross-compile (`GOARCH=arm GOARM=7`) hoặc chạy bridge ở máy/VPS khác rồi gọi từ điện thoại.
 - `big-pickle` không có quota token kiểu "vài tỷ token"; lỗi 429 là của lane free/upstream,
   thường do sai TLS fingerprint chứ không phải model hết hạn mức.
 - Ảnh đầu vào (`image_url`) được chuyển thành `[image: ...]` dạng text ở chế độ `opencode`.
@@ -267,10 +293,14 @@ python3 -m unittest -v
 Test dùng một fake upstream server, không cần OpenCode thật hay mạng. Các test `FreeModeTests`
 kiểm tra prompt/tools/headers và SSE passthrough của chế độ `opencode_free`.
 
-Đã thử live từ Railway sau khi dùng transport Bun: `/health`, `/v1/models`,
+Đã thử live từ Railway với cả transport Bun và transport Go (`utls`): `/health`, `/v1/models`,
 `/v1/chat/completions` (JSON và SSE) đều trả `200`; nội dung thật từ `big-pickle` là `OK`.
-Trước đó, cùng request gửi bằng `urllib`/`curl` bị `429`, trong khi Bun gửi cùng body/header
+Cùng request gửi bằng `urllib`/`curl` bị `429`, trong khi Bun và helper Go gửi cùng body/header
 trả `200` — xác nhận upstream chặn theo TLS fingerprint, không phải quota hay sai shape.
+
+Fingerprint đo được: Bun JA3 `1523504b38f0fae0d881d4b6554aac1b` / JA4
+`t13d1713h1_5b57614c22b0_7f527383e249`; Python `a1ebe7f90a577e9399eaa60be3c67721`;
+curl `32e4b8812cda0c0d50783b438492a769`.
 
 ## Deploy
 
@@ -315,9 +345,10 @@ docker run --rm -p 8080:8080 \
   opencode2openai
 ```
 
-Image 3 stage: lấy Bun từ `oven/bun:1.4`, build dashboard bằng `node:22-alpine`,
-rồi copy cả hai vào `python:3.12-slim`. `O2A_BUN` mặc định `/usr/local/bin/bun`,
-dashboard có sẵn tại `/`. Healthcheck: `curl http://localhost:8080/health`.
+Image 3 stage: build binary Go tĩnh từ `assets/tls_http` (`golang:1.24-alpine`), build dashboard
+bằng `node:22-alpine`, rồi copy cả hai vào `python:3.12-slim`. `O2A_GO` mặc định
+`/usr/local/bin/o2a-tls`; **không cần Bun/Node lúc runtime**. Dashboard có sẵn tại `/`.
+Healthcheck: `curl http://localhost:8080/health`.
 
 ### 3. Chạy thẳng bằng Python
 
@@ -326,8 +357,9 @@ cp .env.example .env && python3 app.py --port 8080
 # hoặc: ./bin/o2a serve --port 8080
 ```
 
-Cần Bun trong `PATH` (hoặc `O2A_BUN=...`) nếu dùng `UPSTREAM_MODE=opencode_free`;
-dashboard cần `cd dashboard && npm run build` để xuất hiện tại `/`.
+Cần binary Go trong `assets/tls_http/o2a-tls` (build bằng `./build.sh`) hoặc `O2A_GO=...` nếu dùng
+`UPSTREAM_MODE=opencode_free`; Bun chỉ là fallback. Dashboard cần `cd dashboard && npm run build`
+để xuất hiện tại `/`.
 
 > Port Railway phải là `8080`. Start command là `python3 app.py`.
 > File `.env` nằm trong `.gitignore`; repo chỉ chứa `.env.example`.
