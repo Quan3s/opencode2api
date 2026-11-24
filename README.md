@@ -1,6 +1,6 @@
 # opencode2openai
 
-Repo: **https://github.com/Quan3s/opencode2openai** (private)
+Repo: **https://github.com/Quan3s/opencode2openai** (public)
 
 App Python **không cần dependency** (`stdlib` của Python 3.10+) đứng giữa OpenCode và client OpenAI:
 client gửi request theo chuẩn **OpenAI Chat Completions / Responses**, app dịch sang API của OpenCode
