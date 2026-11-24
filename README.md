@@ -158,14 +158,31 @@ Thứ tự ưu tiên: **Go → Bun → `urllib`**.
   hoặc `O2A_BUN=...`.
 - **`urllib`:** chỉ khi không có helper nào; gần như chắc chắn bị `429`.
 
+**Binary có sẵn tại [GitHub Release v1.1.0](https://github.com/Quan3s/opencode2api/releases/tag/v1.1.0):**
+Linux (386/amd64/armv6/armv7/arm64), macOS (amd64/arm64), Windows (386/amd64/arm64),
+FreeBSD (386/amd64/arm64) và **Android thật** (armv7/arm64/x86/x64 — build `GOOS=android`
+bằng NDK r27c), kèm `SHA256SUMS.txt`.
+
 ```bash
-cd assets/tls_http && ./build.sh                       # ra ./o2a-tls cho host hiện tại
-GOOS=linux GOARCH=arm GOARM=7 ./build.sh /data/o2a-tls  # Android arm32 / Termux armv7
-GOOS=linux GOARCH=arm64 ./build.sh /data/o2a-tls        # Android arm64
-O2A_GO=/data/o2a-tls ./bin/o2a serve --port 8080
+# Android 32-bit / Termux armv7l
+curl -fsSL -o o2a-tls \
+  https://github.com/Quan3s/opencode2api/releases/download/v1.1.0/o2a-tls-android-armv7
+chmod +x o2a-tls
+O2A_GO=$PWD/o2a-tls ./bin/o2a serve --port 8080
 ```
 
-`build.sh` dùng `CGO_ENABLED=0` nên binary tĩnh, không cần libc hay toolchain trên thiết bị.
+Tự build:
+
+```bash
+cd assets/tls_http
+./build.sh                                   # host hiện tại (tĩnh, CGO_ENABLED=0)
+GOOS=android GOARCH=arm ./build.sh /data/o2a-tls  # cần ANDROID_NDK_HOME, auto-detect /opt/android-sdk/ndk
+./build-all.sh ./dist                        # full 16 binary + SHA256SUMS.txt
+```
+
+Các target desktop/server tĩnh (`CGO_ENABLED=0`) không cần libc/toolchain lúc chạy.
+Target Android dùng cgo + NDK, tự nhận qua `ANDROID_NDK_HOME` hoặc `$ANDROID_HOME/ndk`;
+thiếu NDK thì `build.sh` fallback sang binary linux tĩnh (vẫn chạy được trên Termux).
 
 Bridge có thể gom SSE thành JSON hoặc passthrough SSE theo thời gian thực, kèm `usage`
 và `tool_calls` thật từ upstream.

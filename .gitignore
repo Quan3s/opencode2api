@@ -8,3 +8,4 @@ dashboard/dist/
 *.log
 .playwright-mcp/
 assets/tls_http/o2a-tls
+assets/tls_http/dist/
