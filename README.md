@@ -1,6 +1,6 @@
 # opencode2openai
 
-Repo: **https://github.com/Quan3s/opencode2openai** (public)
+Repo: **https://github.com/Quan3s/opencode2api** (public)
 
 App Python **không cần dependency** (`stdlib` của Python 3.10+) đứng giữa OpenCode và client OpenAI:
 client gửi request theo chuẩn **OpenAI Chat Completions / Responses**, app dịch sang API của OpenCode
@@ -306,7 +306,7 @@ curl `32e4b8812cda0c0d50783b438492a769`.
 
 ### 1. Railway source deploy từ GitHub (auto deploy — khuyến nghị)
 
-Repo: https://github.com/Quan3s/opencode2openai
+Repo: https://github.com/Quan3s/opencode2api
 
 1. Railway Dashboard → **New Project** → **Deploy from GitHub repo** → chọn repo trên
    (cần cài GitHub App cho account/org chứa repo).
