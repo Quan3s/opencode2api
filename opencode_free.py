@@ -239,8 +239,28 @@ def parse_sse_lines(lines: Iterable[str]) -> tuple[str, list[dict[str, Any]], di
         if isinstance(delta, dict):
             text += str(delta.get("content") or "")
             for call in delta.get("tool_calls", []) or []:
-                if isinstance(call, dict):
-                    tool_calls.append(call)
+                if not isinstance(call, dict):
+                    continue
+                # Upstream streams one call as several deltas (id/name first,
+                # arguments in fragments). Merge them by `index` so the JSON
+                # response carries one complete tool call per function.
+                index = call.get("index")
+                if not isinstance(index, int) or index < 0:
+                    index = len(tool_calls)
+                while len(tool_calls) <= index:
+                    tool_calls.append({})
+                merged = tool_calls[index]
+                if call.get("id"):
+                    merged["id"] = call["id"]
+                if call.get("type"):
+                    merged["type"] = call["type"]
+                fn = call.get("function")
+                if isinstance(fn, dict):
+                    target = merged.setdefault("function", {})
+                    if fn.get("name"):
+                        target["name"] = fn["name"]
+                    if fn.get("arguments") is not None:
+                        target["arguments"] = str(target.get("arguments") or "") + str(fn["arguments"])
     return text, tool_calls, usage
 
 

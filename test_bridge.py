@@ -15,6 +15,7 @@ from pathlib import Path
 
 from app import Bridge, BridgeHandler
 from config import Config
+import opencode_free
 
 
 class FakeUpstream(BaseHTTPRequestHandler):
@@ -302,6 +303,23 @@ class FreeModeTests(unittest.TestCase):
         self.assertIn("Hello ", raw)
         self.assertIn("from free tier", raw)
         self.assertTrue(raw.endswith("data: [DONE]\n\n"))
+
+
+class SseToolCallTests(unittest.TestCase):
+    def test_streamed_tool_call_arguments_are_merged(self):
+        lines = [
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"calc","arguments":""}}]}}]}',
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"x\\":"}}]}}]}',
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"12}"}}]}}]}',
+            'data: {"choices":[{"delta":{"content":"done"}}]}',
+            "data: [DONE]",
+        ]
+        text, calls, _ = opencode_free.parse_sse_lines(lines)
+        self.assertEqual(text, "done")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["id"], "call_1")
+        self.assertEqual(calls[0]["type"], "function")
+        self.assertEqual(calls[0]["function"], {"name": "calc", "arguments": '{"x":12}'})
 
 
 class TransportTests(unittest.TestCase):
