@@ -92,7 +92,10 @@ def request(args: argparse.Namespace, path: str, payload: dict[str, Any] | None 
 
 def cmd_serve(args: argparse.Namespace) -> None:
     env = load_env()
-    os.environ.setdefault("UPSTREAM_MODE", args.mode or env.get("UPSTREAM_MODE", "opencode_free"))
+    if args.mode:
+        os.environ["UPSTREAM_MODE"] = args.mode
+    else:
+        os.environ.setdefault("UPSTREAM_MODE", env.get("UPSTREAM_MODE", "opencode_free"))
     if args.key:
         os.environ["CLIENT_API_KEY"] = args.key
     elif env.get("CLIENT_API_KEY"):
