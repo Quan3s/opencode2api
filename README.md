@@ -148,9 +148,12 @@ nếu không có bun, bridge fallback sang `urllib` và có thể lại gặp `4
 Bridge có thể gom SSE thành JSON hoặc passthrough SSE theo thời gian thực, kèm `usage`
 và `tool_calls` thật từ upstream.
 
-> Free tier gắn quota theo IP egress. Từ VM/Railway thường nhận `429 FreeUsageLimitError`
-> dù request shape đã đúng; chạy từ IP residential hoặc dùng key Go/Zen hợp lệ nếu cần text thật.
-> Go lane (`/zen/go`) yêu cầu API key, không phải chế độ free.
+> `429 FreeUsageLimitError` là thông báo chung của upstream free lane, **không phải hết quota của
+> `big-pickle`** (model này không có giới hạn dạng vài tỷ token). Nguyên nhân đã xác nhận là TLS
+> fingerprint: cùng body/header, `urllib`/`curl` nhận `429`, Bun nhận `200`. `o2a serve` tự tìm
+> Bun ở `PATH`, `~/.bun/bin/bun` và `/usr/local/bin/bun`; kiểm tra bằng `./bin/o2a doctor`.
+> Nếu vẫn `429` dù đã dùng Bun, đó là giới hạn IP/phiên free của upstream — thử IP khác hoặc dùng
+> lane Go/Zen có key (`/zen/go` yêu cầu API key, không phải chế độ free).
 
 ### 3. `UPSTREAM_MODE=openai` — nói chuyện với gateway opencode2api
 
@@ -247,10 +250,11 @@ hoặc `x-api-key: <key>`. Để trống để tắt auth (chỉ nên dùng loca
 - Không có token usage thật từ OpenCode generate API → `usage` là ước lượng theo độ dài text.
 - Streaming ở chế độ `opencode` là chia nhỏ text đã generate xong (SSE chunk chuẩn OpenAI),
   không phải token streaming thật; các chế độ `openai` và `opencode_free` stream passthrough theo thời gian thực.
-- Chế độ `opencode_free` cần Bun làm transport để khớp TLS fingerprint của CLI. Không có Bun
-  thì bridge vẫn chạy nhưng upstream có thể trả `429 FreeUsageLimitError`.
-- Vẫn chịu quota free tier của OpenCode; nếu tài khoản/IP thực sự hết hạn mức thì mọi client,
-  kể cả CLI chính thức, đều nhận `429`.
+- Chế độ `opencode_free` cần Bun làm transport để khớp TLS fingerprint của CLI. `o2a serve` tự
+  tìm Bun ở `PATH`, `~/.bun/bin/bun`, `/usr/local/bin/bun`; thiếu Bun thì bridge fallback sang
+  `urllib` và upstream gần như chắc chắn trả `429 FreeUsageLimitError`.
+- `big-pickle` không có quota token kiểu "vài tỷ token"; lỗi 429 là của lane free/upstream,
+  thường do sai TLS fingerprint chứ không phải model hết hạn mức.
 - Ảnh đầu vào (`image_url`) được chuyển thành `[image: ...]` dạng text ở chế độ `opencode`.
 - `/v1/responses` chưa hỗ trợ `stream: true` — dùng `/v1/chat/completions` nếu cần streaming.
 

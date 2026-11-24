@@ -22,6 +22,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from config import resolve_bun
+
 ROOT = Path(__file__).parent
 ENV_FILE = ROOT / ".env"
 
@@ -102,6 +104,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         os.environ.setdefault("CLIENT_API_KEY", env["CLIENT_API_KEY"])
     if env.get("O2A_BUN"):
         os.environ.setdefault("O2A_BUN", env["O2A_BUN"])
+    os.environ["O2A_BUN"] = resolve_bun(os.environ.get("O2A_BUN"))
     os.execv(sys.executable, [sys.executable, str(ROOT / "app.py"), "--port", str(args.port)])
 
 
@@ -216,8 +219,8 @@ def cmd_config(args: argparse.Namespace) -> None:
 
 
 def cmd_doctor(args: argparse.Namespace) -> None:
-    bun = os.environ.get("O2A_BUN") or load_env().get("O2A_BUN") or "bun"
-    found = shutil.which(bun)
+    bun = resolve_bun(os.environ.get("O2A_BUN") or load_env().get("O2A_BUN"))
+    found = shutil.which(bun) or (bun if Path(bun).is_file() else None)
     print(f"bun: {found or 'MISSING (free mode may return 429)'}")
     with request(args, "/health") as response:
         print(f"health: HTTP {response.status} {response.read().decode('utf-8', 'replace')}")

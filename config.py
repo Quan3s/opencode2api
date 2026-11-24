@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,24 @@ def _load_dotenv(path: str = ".env") -> None:
 
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
+
+
+def resolve_bun(value: str | None = None) -> str:
+    """Resolve the Bun executable, including non-login shells without ~/.bun/bin in PATH."""
+    candidate = value or _env("O2A_BUN", "bun")
+    if candidate != "bun":
+        return candidate  # explicit path stays explicit (including deliberately missing paths)
+    found = shutil.which("bun")
+    if found:
+        return found
+    for path in (
+        Path.home() / ".bun" / "bin" / "bun",
+        Path("/root/.bun/bin/bun"),
+        Path("/usr/local/bin/bun"),
+    ):
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    return candidate
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -87,7 +106,7 @@ class Config:
             append_assistant_cue=_env_bool("APPEND_ASSISTANT_CUE", True),
             stream_chunk_chars=_env_int("STREAM_CHUNK_CHARS", 12),
             timeout=_env_int("REQUEST_TIMEOUT", 180),
-            bun_path=_env("O2A_BUN", "bun"),
+            bun_path=resolve_bun(_env("O2A_BUN", "bun")),
         )
 
         path = config_path or _env("CONFIG_FILE", "")
