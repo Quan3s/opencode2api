@@ -163,6 +163,28 @@ Linux (386/amd64/armv6/armv7/arm64), macOS (amd64/arm64), Windows (386/amd64/arm
 FreeBSD (386/amd64/arm64) và **Android thật** (armv7/arm64/x86/x64 — build `GOOS=android`
 bằng NDK r27c), kèm `SHA256SUMS.txt`.
 
+**Cách đơn giản nhất: `install.sh` tự detect OS/arch, tải đúng binary và verify SHA256.**
+
+```bash
+# Trong repo: cài vào assets/tls_http/o2a-tls (bridge tự nhận, không cần O2A_GO)
+./install.sh
+./bin/o2a serve --port 8080
+```
+
+Từ máy khác (Android/Termux, không cần git clone trước):
+
+```bash
+curl -fsSL -o install.sh \
+  https://raw.githubusercontent.com/Quan3s/opencode2api/main/install.sh
+chmod +x install.sh
+./install.sh                       # chọn o2a-tls-android-armv7 / arm64 / x86 / x64
+O2A_GO=$PWD/o2a-tls ./bin/o2a serve --port 8080
+```
+
+Có thể chỉ định đích hoặc version: `./install.sh /data/o2a-tls`, `O2A_VERSION=v1.1.0 ./install.sh`.
+
+Tải thủ công nếu muốn:
+
 ```bash
 # Android 32-bit / Termux armv7l
 curl -fsSL -o o2a-tls \
