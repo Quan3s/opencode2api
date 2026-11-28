@@ -71,7 +71,7 @@ JSON
 ```
 
 Response in ra `[tool_call] {...}`; `--tool-result` gửi kết quả tool vòng tiếp theo.
-Tên tool được giữ nguyên từ request đến response (bridge không đổi tên tool).
+Tên tool client được giữ nguyên từ request đến response (bridge không đổi tên tool).
 
 ## Web dashboard (React)
 
@@ -136,10 +136,13 @@ Những phần được tái tạo:
 - endpoint `/openai/v1/chat/completions` với `Authorization: Bearer public`;
 - UA `opencode/latest/2.3.0/cli`, `x-opencode-client: cli`, session id `ses_...`, project id 40-hex,
   header trace `b3`/`traceparent`;
-- `messages` và `tools` của client được giữ **nguyên vẹn** — không inject system prompt CLI 2.3.0,
-  không chèn 41 tool definitions của OpenCode (bộ tool đó có cả `bash` lẫn `shell`, làm model
-  chọn sai tool call), không đổi tên tool;
-- chỉ thêm `stream: true`, `stream_options.include_usage`, `max_completion_tokens: 32000` ở tầng transport.
+- system prompt CLI 2.3.0 và **40/41** tool definitions (đã bỏ `shell`; bản capture không có `bash`)
+  — đây là shape tối thiểu để upstream free không trả `429` (đã thử: thiếu prompt hoặc thiếu
+  toolset → 429; cắt còn ≤30 tool → 429);
+- ngay trước prompt có một đoạn `OVERRIDE - HIGHEST PRIORITY` kèm danh sách tên tool của client,
+  bắt model bỏ qua harness/Code Mode/`execute` trong prompt và **chỉ gọi tool do client cung cấp**;
+- `messages` và tên tool của client được giữ nguyên (không đổi thành `mcp_<hash>`);
+- `stream: true`, `stream_options.include_usage`, `max_completion_tokens: 32000`.
 
 **Transport:** mã Python vẫn dùng toàn bộ thư viện chuẩn, nhưng request free được gửi qua
 một helper ngoài để tái tạo đúng **TLS ClientHello** của CLI chính thức (chạy trên Bun/BoringSSL).

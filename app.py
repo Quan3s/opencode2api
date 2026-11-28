@@ -246,7 +246,7 @@ class Bridge:
         raw_body: dict[str, Any] | None,
         client_headers: dict[str, str] | None,
     ) -> tuple[bytes, dict[str, str], dict[str, str]]:
-        """Build the free-tier body (client messages/tools unchanged) and v2 headers."""
+        """Build the free-lane body (client messages/tools preserved) and v2 headers."""
         payload = dict(raw_body or {})
         payload["model"] = self.upstream_model(model)
         payload["messages"] = messages

@@ -284,12 +284,18 @@ class FreeModeTests(unittest.TestCase):
         self.assertTrue(body["stream"])
         self.assertTrue(body["stream_options"]["include_usage"])
         self.assertEqual(body["max_completion_tokens"], 32000)
-        # No OpenCode CLI prompt/toolset is injected: the client's own messages
-        # and tools go through verbatim, so no `bash` vs `shell` confusion.
-        self.assertEqual(body["messages"][0], {"role": "system", "content": "SYSTEM CỦA CLIENT"})
-        self.assertNotIn("You are an AI agent running in OpenCode", json.dumps(body))
-        self.assertEqual(len(body["tools"]), 1)
+        # The free lane requires the CLI prompt + most of its toolset, so we keep
+        # them but neutralize them with an override and drop `bash`/`shell`.
+        system = body["messages"][0]["content"]
+        self.assertTrue(system.startswith("OVERRIDE - HIGHEST PRIORITY"))
+        self.assertIn("You are an AI agent running in OpenCode", system)
+        self.assertIn("Client tool names: my_tool", system)
+        self.assertEqual(body["messages"][1], {"role": "system", "content": "SYSTEM CỦA CLIENT"})
+        self.assertEqual(len(body["tools"]), 41)  # 1 client tool + 40 official tools
         self.assertEqual(body["tools"][0]["function"]["name"], "my_tool")
+        official_names = [t["function"]["name"] for t in body["tools"][1:]]
+        self.assertNotIn("bash", official_names)
+        self.assertNotIn("shell", official_names)
         self.assertEqual(headers["user-agent"], "opencode/latest/2.3.0/cli")
         self.assertEqual(headers["x-opencode-client"], "cli")
         self.assertRegex(headers["b3"], r"^[0-9a-f]{32}-[0-9a-f]{16}-1-[0-9a-f]{16}$")
