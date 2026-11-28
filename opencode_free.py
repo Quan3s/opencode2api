@@ -1,8 +1,9 @@
-"""Reconstruct the official OpenCode 2.x free-tier inference request shape.
+"""Adapt a client Chat Completions body to the OpenCode free-tier origin.
 
-Based on the wire format used by the OpenCode CLI on the /inference origin:
-v2 endpoint /openai/v1/chat/completions, the CLI system prompt and toolset,
-forced SSE with usage, opaque client-tool names and descending session ids.
+Only the transport envelope is reconstructed: v2 endpoint, CLI-like headers and
+forced SSE with usage. The client's own system prompt and tool definitions are
+passed through unchanged -- injecting the CLI prompt/toolset made models confuse
+the client's tools with the official ones (e.g. `bash` vs `shell`).
 """
 
 from __future__ import annotations
@@ -12,14 +13,9 @@ import hashlib
 import json
 import re
 import secrets
-from pathlib import Path
 from typing import Any, Iterable
 
-ASSETS = Path(__file__).parent / "assets"
-PROMPT = (ASSETS / "opencode_prompt_v230.txt").read_text(encoding="utf-8")
-TOOLS = json.loads((ASSETS / "opencode_tools_v230.json").read_text(encoding="utf-8"))
 ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-PROMPT_MARKER = "You are an AI agent running in OpenCode, a coding agent harness."
 SESSION_RE = re.compile(r"^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$")
 TIME_RE = re.compile(r"^[0-9a-f]{9}f[c-f][0-9a-f]$")
 BOOT_NONCE = secrets.token_bytes(16)
@@ -73,103 +69,8 @@ def request_identity(body: dict[str, Any], headers: dict[str, str], scope: str) 
     return session, project
 
 
-def official_prompt(model: str) -> str:
-    """Render the CLI 2.3.0 system prompt with this request's dynamic fields."""
-    api_model = str(model).removeprefix("opencode/").strip() or "unknown"
-    model_name = {
-        "big-pickle": "Big Pickle",
-    }.get(api_model, api_model.replace("-", " ").title())
-    cwd = Path.cwd()
-    values = {
-        "{{MODEL_NAME}}": model_name,
-        "{{MODEL_ID}}": api_model,
-        "{{DATE}}": dt.datetime.now(dt.timezone.utc).strftime("%a %b %d %Y"),
-        "{{CWD}}": str(cwd),
-        "{{IS_GIT}}": "yes" if (cwd / ".git").exists() else "no",
-    }
-    prompt = PROMPT
-    for marker, value in values.items():
-        prompt = prompt.replace(marker, value)
-    return prompt
-
-
-def _text(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        return "\n".join(_text(v) for v in value)
-    if isinstance(value, dict):
-        return _text(value.get("text", value.get("content", "")))
-    return ""
-
-
-def client_tool_wire_name(name: str, used: set[str]) -> str:
-    digest = hashlib.sha256(name.encode()).hexdigest()[:12]
-    base = "mcp_" + digest
-    if base not in used:
-        used.add(base)
-        return base
-    suffix = 2
-    while True:
-        tag = f"_{suffix}"
-        candidate = base[: 64 - len(tag)] + tag
-        if candidate not in used:
-            used.add(candidate)
-            return candidate
-        suffix += 1
-
-
-def official_toolset() -> list[dict[str, Any]]:
-    """Return the exact tool catalog captured from the official CLI request."""
-    return json.loads(json.dumps(TOOLS, ensure_ascii=False))
-
-
 def shape_chat_body(payload: dict[str, Any], tool_renames: dict[str, str]) -> dict[str, Any]:
-    """Mutate a client Chat Completions body into the free-tier wire body."""
-    messages = payload.get("messages", [])
-    if not isinstance(messages, list):
-        return payload
-    model = str(payload.get("model", "big-pickle"))
-    prompt = official_prompt(model)
-    kept: list[Any] = []
-    instructions: list[str] = []
-    already_shaped = False
-    for message in messages:
-        if not isinstance(message, dict):
-            kept.append(message)
-            continue
-        if message.get("role") not in ("system", "developer"):
-            kept.append(message)
-            continue
-        text = _text(message.get("content")).strip()
-        if PROMPT_MARKER in text:
-            already_shaped = True
-        elif text:
-            instructions.append(text)
-    if not already_shaped:
-        system = prompt + ("\n\n" + "\n".join(instructions) if instructions else "")
-        kept.insert(0, {"role": "system", "content": system})
-    payload["messages"] = kept
-
-    tools = payload.get("tools")
-    shaped_tools: list[Any] = []
-    used: set[str] = set()
-    if isinstance(tools, list):
-        for tool in tools:
-            if not isinstance(tool, dict):
-                shaped_tools.append(tool)
-                continue
-            function = tool.get("function")
-            if isinstance(function, dict) and isinstance(function.get("name"), str):
-                original = function["name"]
-                wire = client_tool_wire_name(original, used)
-                tool_renames[wire] = original
-                function["name"] = wire
-                if isinstance(function.get("description"), str):
-                    function["description"] = function["description"].replace(" ", "\u00a0")
-            shaped_tools.append(tool)
-    shaped_tools.extend(official_toolset())
-    payload["tools"] = shaped_tools
+    """Add only the free-tier transport flags; leave messages and tools intact."""
     payload["stream"] = True
     payload["stream_options"] = {"include_usage": True}
     payload.setdefault("max_completion_tokens", 32000)

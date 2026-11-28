@@ -71,7 +71,7 @@ JSON
 ```
 
 Response in ra `[tool_call] {...}`; `--tool-result` gửi kết quả tool vòng tiếp theo.
-Tên client tool được khôi phục từ dạng `mcp_<hash>` của upstream.
+Tên tool được giữ nguyên từ request đến response (bridge không đổi tên tool).
 
 ## Web dashboard (React)
 
@@ -136,9 +136,10 @@ Những phần được tái tạo:
 - endpoint `/openai/v1/chat/completions` với `Authorization: Bearer public`;
 - UA `opencode/latest/2.3.0/cli`, `x-opencode-client: cli`, session id `ses_...`, project id 40-hex,
   header trace `b3`/`traceparent`;
-- system prompt CLI 2.3.0 (capture từ request thật) + environment block và 41 tool definitions chính thức;
-- client tool đổi tên thành `mcp_<sha256[:12]>` rồi khôi phục tên gốc trong response;
-- `stream: true`, `stream_options.include_usage`, `max_completion_tokens: 32000`.
+- `messages` và `tools` của client được giữ **nguyên vẹn** — không inject system prompt CLI 2.3.0,
+  không chèn 41 tool definitions của OpenCode (bộ tool đó có cả `bash` lẫn `shell`, làm model
+  chọn sai tool call), không đổi tên tool;
+- chỉ thêm `stream: true`, `stream_options.include_usage`, `max_completion_tokens: 32000` ở tầng transport.
 
 **Transport:** mã Python vẫn dùng toàn bộ thư viện chuẩn, nhưng request free được gửi qua
 một helper ngoài để tái tạo đúng **TLS ClientHello** của CLI chính thức (chạy trên Bun/BoringSSL).
@@ -330,7 +331,7 @@ python3 -m unittest -v
 ```
 
 Test dùng một fake upstream server, không cần OpenCode thật hay mạng. Các test `FreeModeTests`
-kiểm tra prompt/tools/headers và SSE passthrough của chế độ `opencode_free`.
+kiểm tra việc giữ nguyên messages/tools của client, headers và SSE passthrough của chế độ `opencode_free`.
 
 Đã thử live từ Railway với cả transport Bun và transport Go (`utls`): `/health`, `/v1/models`,
 `/v1/chat/completions` (JSON và SSE) đều trả `200`; nội dung thật từ `big-pickle` là `OK`.
